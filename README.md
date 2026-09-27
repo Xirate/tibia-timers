@@ -21,6 +21,7 @@ You mark the screen area where the item's action bar slot sits, or assign its ke
 - **Overlay:** a compact, draggable, always-on-top countdown list. *Lock overlay* makes clicks pass through it into the game.
 - **Survives restarts:** running countdowns continue after you close and reopen the app. Settings are stored in `TibiaTimers.ini` next to the exe.
 - **Single small exe with no dependencies.**
+- **Optional launcher** (`TibiaLauncher.exe`): starts Tibia with or without the timers, and can close the timers when you close Tibia.
 
 ## Building
 
@@ -32,7 +33,7 @@ cd tibia-timers
 powershell -ExecutionPolicy Bypass -File build.ps1
 ```
 
-This creates `TibiaTimers.exe` in the same folder. To compile by hand instead:
+This creates `TibiaTimers.exe` and `TibiaLauncher.exe` in the same folder. To compile by hand instead:
 
 ```powershell
 & "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /target:winexe /optimize+ /out:TibiaTimers.exe /r:System.Windows.Forms.dll /r:System.Drawing.dll TibiaTimers.cs
@@ -47,6 +48,15 @@ Close the app before rebuilding, because Windows locks an exe while it is runnin
 3. Optional: click **Set key** and press the Tibia hotkey you use for that item.
 4. Click **Sound...** to pick a file, and set **Alert _N_ s before end**.
 5. Play. Using the slot starts the countdown, and the sound plays before it ends.
+
+## Launcher
+
+`TibiaLauncher.exe` gives you two buttons: **Start Tibia + Timers** and **Start Tibia only**. It opens the official Tibia launcher, so updates and login work as usual.
+
+- **Finding Tibia:** it looks in the standard install location (`%LOCALAPPDATA%\Tibia\Tibia.exe`). Use **Change...** if yours is somewhere else.
+- **Close Tibia Timers when Tibia is closed:** the launcher waits in the background until the game client exits, then closes the timers.
+- **Shortcuts:** you can skip the window with `TibiaLauncher.exe --timers` or `TibiaLauncher.exe --no-timers`, for example on a desktop shortcut.
+- **Location:** keep `TibiaLauncher.exe` in the same folder as `TibiaTimers.exe`.
 
 ## Notes
 
