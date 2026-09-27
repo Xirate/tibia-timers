@@ -62,6 +62,7 @@ namespace TibiaTimers
         public string SoundPath = "";
         public int Volume = 80;
         public Retrigger Mode = Retrigger.Restart;
+        public bool Silent;   // plain countdown: no sound, no warning highlight
 
         // runtime state
         public bool Running, Paused, Alerted, Expired;
@@ -135,6 +136,7 @@ namespace TibiaTimers
             sb.AppendLine("Sound=" + SoundPath);
             sb.AppendLine("Volume=" + Volume);
             sb.AppendLine("Mode=" + (int)Mode);
+            sb.AppendLine("Silent=" + (Silent ? 1 : 0));
             sb.AppendLine("Running=" + (Running ? 1 : 0));
             sb.AppendLine("Paused=" + (Paused ? 1 : 0));
             sb.AppendLine("Alerted=" + (Alerted ? 1 : 0));
@@ -159,6 +161,7 @@ namespace TibiaTimers
                 case "Sound": SoundPath = v; break;
                 case "Volume": Volume = Math.Max(0, Math.Min(100, int.Parse(v))); break;
                 case "Mode": Mode = (Retrigger)int.Parse(v); break;
+                case "Silent": Silent = v == "1"; break;
                 case "Running": Running = v == "1"; break;
                 case "Paused": Paused = v == "1"; break;
                 case "Alerted": Alerted = v == "1"; break;
@@ -484,7 +487,7 @@ namespace TibiaTimers
                 Color c; string time;
                 if (d.Expired) { time = "EXPIRED"; c = blink ? Color.FromArgb(255, 80, 80) : Color.FromArgb(150, 40, 40); }
                 else if (d.Paused) { time = "II " + Util.Fmt(d.RemainingMs()); c = Color.Gold; }
-                else if (d.Alerted) { time = Util.Fmt(d.RemainingMs()); c = blink ? Color.FromArgb(255, 110, 90) : Color.Orange; }
+                else if (d.Alerted && !d.Silent) { time = Util.Fmt(d.RemainingMs()); c = blink ? Color.FromArgb(255, 110, 90) : Color.Orange; }
                 else { time = Util.Fmt(d.RemainingMs()); c = Color.FromArgb(120, 230, 120); }
 
                 SizeF ts = g.MeasureString(time, nameFont);
@@ -511,7 +514,7 @@ namespace TibiaTimers
     {
         public readonly TimerData D;
         readonly MainForm F;
-        CheckBox chkEnabled;
+        CheckBox chkEnabled, chkSilent;
         TextBox txtName, txtDuration;
         Label lblTime, lblRegion, lblKey, lblSound;
         ProgressBar bar;
@@ -589,6 +592,11 @@ namespace TibiaTimers
             cmbMode.Items.AddRange(new object[] { "Restart countdown (potions)", "Ignore while running", "Pause / resume (rings, amulets)" });
             cmbMode.SelectedIndex = (int)d.Mode;
             cmbMode.SelectedIndexChanged += delegate { D.Mode = (Retrigger)cmbMode.SelectedIndex; F.Dirty = true; };
+            chkSilent = Add(new CheckBox(), 680, 44, 110, 24);
+            chkSilent.Text = "Silent";
+            chkSilent.Checked = d.Silent;
+            chkSilent.CheckedChanged += delegate { D.Silent = chkSilent.Checked; UpdateSilentControls(); F.Dirty = true; };
+            new ToolTip().SetToolTip(chkSilent, "Just count down: no sound and no warning highlight");
 
             // line 3: triggers and sound
             btnRegion = Btn("Set region", 8, 75, 82, delegate { F.PickRegion(this); });
@@ -607,7 +615,14 @@ namespace TibiaTimers
             numVol.ValueChanged += delegate { D.Volume = (int)numVol.Value; F.Dirty = true; };
 
             RefreshLabels();
+            UpdateSilentControls();
             UpdateView();
+        }
+
+        void UpdateSilentControls()
+        {
+            bool on = !D.Silent;
+            numWarn.Enabled = btnSound.Enabled = btnPlay.Enabled = numVol.Enabled = lblSound.Enabled = on;
         }
 
         void PickSound()
@@ -650,7 +665,7 @@ namespace TibiaTimers
                 time = Util.Fmt(rem);
                 barVal = (int)Math.Max(0, Math.Min(1000, rem * 1000L / Math.Max(1, D.DurationSec * 1000L)));
                 if (D.Paused) { back = Color.LightYellow; fore = Color.DarkGoldenrod; }
-                else if (D.Alerted) { back = DateTime.Now.Millisecond < 500 ? Color.LightSalmon : Color.MistyRose; fore = Color.DarkRed; }
+                else if (D.Alerted && !D.Silent) { back = DateTime.Now.Millisecond < 500 ? Color.LightSalmon : Color.MistyRose; fore = Color.DarkRed; }
                 else { back = Color.Honeydew; fore = Color.DarkGreen; }
             }
             SetIfChanged(lblTime, time);
@@ -908,7 +923,7 @@ namespace TibiaTimers
             foreach (TimerRow r in rows)
             {
                 bool changed;
-                if (r.D.Update(out changed))
+                if (r.D.Update(out changed) && !r.D.Silent)
                 {
                     Sound.Play(r.D);
                     Status(DateTime.Now.ToString("HH:mm:ss") + "  ALERT: " + r.D.Name + " expires in " + Util.Fmt(r.D.RemainingMs()));

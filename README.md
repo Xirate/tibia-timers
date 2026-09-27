@@ -13,6 +13,7 @@ You mark the screen area where the item's action bar slot sits, or assign its ke
 - **Click or key triggers:** drag a box over the hotkey slot, set a keyboard hotkey (Shift, Ctrl and Alt combos work), or use both.
 - **Any sound file:** `.mp3`, `.wav` or `.wma`, with a volume setting per timer. A built-in chime plays if no file is set or the file goes missing.
 - **Early alert:** set how many seconds before the end the sound plays, and use any duration from seconds up to 24 h (`10`, `9:30`, `1:00:00`).
+- **Silent timers:** tick *Silent* for a plain countdown with no sound and no warning highlight. It still shows in the main window and the overlay.
 - **Re-click behaviour per timer:**
   - *Restart countdown*: re-drinking a potion refreshes the timer.
   - *Pause / resume*: taking a ring or amulet off pauses it and putting it back on resumes it, the same way Tibia handles them.
