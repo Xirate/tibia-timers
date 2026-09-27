@@ -23,17 +23,32 @@ You mark the screen area where the item's action bar slot sits, or assign its ke
 - **Single small exe with no dependencies.**
 - **Optional launcher** (`TibiaLauncher.exe`): starts Tibia with or without the timers, and can close the timers when you close Tibia.
 
-## Building
+## Setup
 
 You need **Windows 10 or 11**. The .NET Framework 4.x compiler that comes with Windows is all it uses; you don't need Visual Studio or the .NET SDK.
 
+1. Get the code, either with **Code -> Download ZIP** on GitHub (then unzip it wherever you want the app to live) or with `git clone`:
+   ```powershell
+   git clone https://github.com/Xirate/tibia-timers.git
+   ```
+2. Double-click **`setup.cmd`**. It walks you through the setup:
+   - checks the compiler
+   - closes the app if it's already running
+   - builds `TibiaTimers.exe` and `TibiaLauncher.exe`
+   - finds your Tibia install, or asks you to pick `Tibia.exe`
+   - asks which desktop shortcuts you want: **Tibia + Timers**, **Tibia (no timers)**, **Tibia Launcher**, **Tibia Timers**
+
+Run `setup.cmd` again whenever you update the code. Your settings are kept. `setup.cmd -Yes` accepts all the default answers without asking.
+
+### Building without setup
+
+`build.ps1` only builds the two exe files, with no questions and no shortcuts:
+
 ```powershell
-git clone https://github.com/Xirate/tibia-timers.git
-cd tibia-timers
 powershell -ExecutionPolicy Bypass -File build.ps1
 ```
 
-This creates `TibiaTimers.exe` and `TibiaLauncher.exe` in the same folder. To compile by hand instead:
+To compile by hand instead:
 
 ```powershell
 & "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /target:winexe /optimize+ /out:TibiaTimers.exe /r:System.Windows.Forms.dll /r:System.Drawing.dll TibiaTimers.cs
@@ -43,7 +58,7 @@ Close the app before rebuilding, because Windows locks an exe while it is runnin
 
 ## Usage
 
-1. Run `TibiaTimers.exe`. It starts with three example timers. Edit their names and durations, or add your own.
+1. Run `TibiaTimers.exe`, or use the **Tibia + Timers** shortcut. It starts with three example timers. Edit their names and durations, or add your own.
 2. For each timer, click **Set region** and drag a box over the item's action bar slot in Tibia. A single click marks one slot. **Show regions** displays all your boxes.
 3. Optional: click **Set key** and press the Tibia hotkey you use for that item.
 4. Click **Sound...** to pick a file, and set **Alert _N_ s before end**.
