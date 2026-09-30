@@ -8,6 +8,7 @@ using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Media;
+using System.Net;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -388,7 +389,7 @@ namespace TibiaTimers
     class CountdownOverlay : Form
     {
         const int GWL_EXSTYLE = -20, WS_EX_TRANSPARENT = 0x20, WS_EX_TOOLWINDOW = 0x80, WS_EX_NOACTIVATE = 0x08000000;
-        const int ExpiredVisibleSec = 30;
+        public const int ExpiredVisibleSec = 30;
         readonly Font nameFont = new Font("Segoe UI", 10f, FontStyle.Bold);
         readonly Font smallFont = new Font("Segoe UI", 8.5f);
         List<TimerData> items = new List<TimerData>();
@@ -677,6 +678,289 @@ namespace TibiaTimers
         }
     }
 
+    // Local web server for an OBS "Browser" source: GET / = overlay page, GET /state = JSON snapshot.
+    // Put an obs-overlay.html next to the exe to replace the built-in page.
+    class ObsServer
+    {
+        HttpListener listener;
+        public volatile string StateJson = "{\"timers\":[]}";
+        public bool Running { get { return listener != null && listener.IsListening; } }
+
+        public void Start(int port)
+        {
+            Stop();
+            HttpListener l = new HttpListener();
+            l.Prefixes.Add("http://localhost:" + port + "/");
+            l.Start();
+            listener = l;
+            Thread t = new Thread(AcceptLoop);
+            t.IsBackground = true;
+            t.Name = "obs-http";
+            t.Start(l);
+        }
+
+        public void Stop()
+        {
+            if (listener == null) return;
+            try { listener.Close(); } catch { }
+            listener = null;
+        }
+
+        void AcceptLoop(object o)
+        {
+            HttpListener l = (HttpListener)o;
+            while (true)
+            {
+                HttpListenerContext c;
+                try { c = l.GetContext(); }
+                catch { return; }
+                ThreadPool.QueueUserWorkItem(Handle, c);
+            }
+        }
+
+        void Handle(object o)
+        {
+            HttpListenerContext c = (HttpListenerContext)o;
+            try
+            {
+                string path = c.Request.Url.AbsolutePath;
+                string text, type;
+                if (path == "/state") { text = StateJson; type = "application/json"; }
+                else if (path == "/" || path == "/overlay") { text = Page(); type = "text/html; charset=utf-8"; }
+                else { c.Response.StatusCode = 404; text = "not found"; type = "text/plain"; }
+                byte[] body = Encoding.UTF8.GetBytes(text);
+                c.Response.ContentType = type;
+                c.Response.Headers["Cache-Control"] = "no-store";
+                c.Response.ContentLength64 = body.Length;
+                c.Response.OutputStream.Write(body, 0, body.Length);
+            }
+            catch { }
+            finally { try { c.Response.Close(); } catch { } }
+        }
+
+        static string Page()
+        {
+            string custom = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "obs-overlay.html");
+            try { if (File.Exists(custom)) return File.ReadAllText(custom, Encoding.UTF8); } catch { }
+            return Html;
+        }
+
+        public static string Json(List<TimerData> all, int expiredVisibleSec)
+        {
+            StringBuilder sb = new StringBuilder("{\"timers\":[");
+            DateTime now = DateTime.UtcNow;
+            bool first = true;
+            foreach (TimerData d in all)
+            {
+                string state = d.Paused ? "paused" : d.Running ? "running"
+                    : d.Expired && (now - d.ExpiredUtc).TotalSeconds < expiredVisibleSec ? "expired" : "idle";
+                if (!first) sb.Append(',');
+                first = false;
+                sb.Append("{\"name\":\"").Append(Esc(d.Name)).Append("\",\"state\":\"").Append(state)
+                  .Append("\",\"rem\":").Append(d.RemainingMs())
+                  .Append(",\"dur\":").Append(d.DurationSec * 1000L)
+                  .Append(",\"alert\":").Append(d.Alerted && !d.Silent ? "true" : "false")
+                  .Append(",\"enabled\":").Append(d.Enabled ? "true" : "false")
+                  .Append('}');
+            }
+            return sb.Append("]}").ToString();
+        }
+
+        static string Esc(string s)
+        {
+            StringBuilder sb = new StringBuilder();
+            foreach (char ch in s ?? "")
+            {
+                if (ch == '"' || ch == '\\') sb.Append('\\').Append(ch);
+                else if (ch < 0x20) sb.Append("\\u").Append(((int)ch).ToString("x4"));
+                else sb.Append(ch);
+            }
+            return sb.ToString();
+        }
+
+        // Transparent page; options via query: ?scale=1.5  &panel=0 (no dark box)  &idle=1 (also list idle timers)
+        const string Html = @"<!doctype html>
+<html><head><meta charset='utf-8'><title>Tibia Timers</title>
+<style>
+:root { --s: 1; }
+html, body { margin: 0; background: transparent; overflow: hidden; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; font-weight: 700; font-size: calc(16px * var(--s)); color: #dcdcdc; padding: calc(4px * var(--s)); }
+#list { display: inline-flex; flex-direction: column; gap: calc(5px * var(--s)); min-width: calc(230px * var(--s)); }
+.panel #list { background: rgba(20, 20, 24, .78); border-radius: calc(8px * var(--s)); padding: calc(8px * var(--s)) calc(11px * var(--s)); box-shadow: 0 2px 8px rgba(0,0,0,.4); }
+.row { display: grid; grid-template-columns: 1fr auto; column-gap: calc(14px * var(--s)); text-shadow: 0 1px 2px #000, 0 0 3px #000; }
+.name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #e6e6e6; }
+.time { font-variant-numeric: tabular-nums; }
+.bar { grid-column: 1 / 3; height: calc(3px * var(--s)); background: rgba(255,255,255,.15); border-radius: 2px; margin-top: calc(2px * var(--s)); }
+.bar i { display: block; height: 100%; border-radius: 2px; background: currentColor; }
+.running { color: #78e678; } .paused { color: #ffd700; } .alert { color: #ff7a5a; } .expired { color: #ff5050; } .idle { color: #8a8a8a; }
+.blink .time { animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: .35; } }
+</style></head>
+<body><div id='list'></div>
+<script>
+const q = new URLSearchParams(location.search);
+document.documentElement.style.setProperty('--s', parseFloat(q.get('scale')) || 1);
+if (q.get('panel') !== '0') document.body.classList.add('panel');
+const showIdle = q.get('idle') === '1';
+// Outside OBS (e.g. the Preview button) use a dark backdrop so light text is visible; OBS stays transparent.
+if (!window.obsstudio) { document.body.style.background = '#2b2d31'; document.body.style.minHeight = '100vh'; }
+const list = document.getElementById('list');
+let timers = [], fetchedAt = 0;
+
+function fmt(ms) {
+  const t = Math.ceil(ms / 1000), h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), s = t % 60;
+  const ss = String(s).padStart(2, '0');
+  return h ? h + ':' + String(m).padStart(2, '0') + ':' + ss : m + ':' + ss;
+}
+
+async function poll() {
+  try {
+    const r = await fetch('/state', { cache: 'no-store' });
+    timers = (await r.json()).timers; fetchedAt = performance.now();
+  } catch (e) { timers = []; }   // app closed: hide everything
+}
+
+function render() {
+  const now = performance.now();
+  list.textContent = '';
+  for (const t of timers) {
+    if (t.state === 'idle' && !(showIdle && t.enabled)) continue;
+    const rem = t.state === 'running' ? Math.max(0, t.rem - (now - fetchedAt)) : t.rem;
+    let cls = t.state, time = fmt(rem);
+    if (t.state === 'expired') { time = 'EXPIRED'; cls += ' blink'; }
+    else if (t.state === 'paused') time = 'II ' + time;
+    else if (t.state === 'idle') time = fmt(t.dur);
+    else if (t.alert) cls = 'alert blink';
+    const row = document.createElement('div'); row.className = 'row ' + cls;
+    const n = document.createElement('span'); n.className = 'name'; n.textContent = t.name;
+    const v = document.createElement('span'); v.className = 'time'; v.textContent = time;
+    const bar = document.createElement('div'); bar.className = 'bar';
+    const fill = document.createElement('i');
+    fill.style.width = (t.state === 'running' || t.state === 'paused' ? Math.min(100, rem / Math.max(1, t.dur) * 100) : 0) + '%';
+    bar.appendChild(fill); row.append(n, v, bar); list.appendChild(row);
+  }
+  list.style.display = list.childElementCount ? '' : 'none';
+}
+
+poll(); setInterval(poll, 500); setInterval(render, 100);
+</script></body></html>";
+    }
+
+    class ObsDialog : Form
+    {
+        readonly MainForm F;
+        readonly CheckBox chkOn, chkPanel, chkIdle;
+        readonly NumericUpDown numPort, numScale;
+        readonly TextBox txtUrl;
+        readonly Label lblState;
+
+        public ObsDialog(MainForm f)
+        {
+            F = f;
+            Text = "OBS browser source";
+            Font = f.Font;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = MinimizeBox = false;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.CenterParent;
+            ClientSize = new Size(Util.S(470), Util.S(300));
+
+            chkOn = new CheckBox();
+            chkOn.Text = "Enable the OBS overlay (local web server, this PC only)";
+            chkOn.Bounds = R(12, 12, 440, 24);
+            chkOn.Checked = f.ObsEnabled;
+
+            Label lp = L("Port", 30, 44, 40);
+            numPort = new NumericUpDown();
+            numPort.Bounds = R(72, 44, 80, 25);
+            numPort.Minimum = 1024; numPort.Maximum = 65535;
+            numPort.Value = f.ObsPort;
+
+            Label ls = L("Size", 180, 44, 36);
+            numScale = new NumericUpDown();
+            numScale.Bounds = R(218, 44, 64, 25);
+            numScale.DecimalPlaces = 2; numScale.Increment = 0.25m;
+            numScale.Minimum = 0.5m; numScale.Maximum = 4m;
+            numScale.Value = (decimal)f.ObsScale;
+            Label lx = L("x", 285, 44, 20);
+
+            chkPanel = new CheckBox();
+            chkPanel.Text = "Dark background box";
+            chkPanel.Bounds = R(30, 76, 180, 24);
+            chkPanel.Checked = f.ObsPanel;
+            chkIdle = new CheckBox();
+            chkIdle.Text = "Also show timers that aren't running";
+            chkIdle.Bounds = R(215, 76, 250, 24);
+            chkIdle.Checked = f.ObsIdle;
+
+            Label lu = L("URL for OBS:", 12, 114, 90);
+            txtUrl = new TextBox();
+            txtUrl.ReadOnly = true;
+            txtUrl.Bounds = R(12, 138, 300, 25);
+            Button btnCopy = new Button();
+            btnCopy.Text = "Copy";
+            btnCopy.Bounds = R(318, 136, 62, 27);
+            btnCopy.Click += delegate { try { Clipboard.SetText(txtUrl.Text); lblState.Text = "URL copied."; } catch { } };
+            Button btnPreview = new Button();
+            btnPreview.Text = "Preview";
+            btnPreview.Bounds = R(384, 136, 74, 27);
+            btnPreview.Click += delegate { if (F.ObsRunning) try { Process.Start(txtUrl.Text); } catch { } };
+
+            Label help = L("In OBS: Sources > + > Browser, paste the URL, set Width 400 and Height 300. " +
+                "The background is transparent and the box hides itself when no timer is running.", 12, 172, 446);
+            help.Height = Util.S(44);
+            help.TextAlign = ContentAlignment.TopLeft;
+            help.ForeColor = Color.DimGray;
+
+            lblState = L("", 12, 222, 446);
+            Button btnClose = new Button();
+            btnClose.Text = "Close";
+            btnClose.Bounds = R(383, 260, 75, 28);
+            btnClose.Click += delegate { Close(); };
+            CancelButton = btnClose;
+
+            Controls.AddRange(new Control[] { chkOn, lp, numPort, ls, numScale, lx, chkPanel, chkIdle, lu, txtUrl, btnCopy, btnPreview, help, lblState, btnClose });
+
+            EventHandler changed = delegate { Apply(); };
+            chkOn.CheckedChanged += changed;
+            numPort.ValueChanged += changed;
+            numScale.ValueChanged += changed;
+            chkPanel.CheckedChanged += changed;
+            chkIdle.CheckedChanged += changed;
+            ShowUrl();
+            ShowState(null);
+        }
+
+        static Rectangle R(int x, int y, int w, int h) { return new Rectangle(Util.S(x), Util.S(y), Util.S(w), Util.S(h)); }
+
+        static Label L(string text, int x, int y, int w)
+        {
+            Label l = new Label();
+            l.Text = text;
+            l.Bounds = R(x, y, w, 25);
+            l.TextAlign = ContentAlignment.MiddleLeft;
+            return l;
+        }
+
+        void Apply()
+        {
+            string err = F.SetObs(chkOn.Checked, (int)numPort.Value, (double)numScale.Value, chkPanel.Checked, chkIdle.Checked);
+            ShowUrl();
+            ShowState(err);
+        }
+
+        void ShowUrl() { txtUrl.Text = F.ObsUrl(); }
+
+        void ShowState(string err)
+        {
+            bool on = F.ObsRunning;
+            numPort.Enabled = !on;   // change the port while it's off
+            if (err != null) { lblState.Text = err; lblState.ForeColor = Color.Red; }
+            else if (on) { lblState.Text = "Running. Add the URL to OBS (or click Preview)."; lblState.ForeColor = Color.DarkGreen; }
+            else { lblState.Text = "Off."; lblState.ForeColor = Color.DimGray; }
+        }
+    }
+
     class MainForm : Form
     {
         public bool Dirty;
@@ -686,6 +970,10 @@ namespace TibiaTimers
         readonly CheckBox chkDetect, chkOnlyTibia, chkTopMost, chkOverlay, chkLockOverlay;
         readonly CountdownOverlay overlay = new CountdownOverlay();
         readonly List<TimerData> allData = new List<TimerData>();
+        readonly ObsServer obs = new ObsServer();
+        public bool ObsEnabled, ObsPanel = true, ObsIdle;
+        public int ObsPort = 8766;
+        public double ObsScale = 1.0;
         readonly Label lblStatus;
         readonly System.Windows.Forms.Timer tick;
         readonly string iniPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "TibiaTimers.ini");
@@ -701,7 +989,7 @@ namespace TibiaTimers
             Text = "Tibia Timers";
             Font = new Font("Segoe UI", 9f);
             AutoScaleMode = AutoScaleMode.None;
-            ClientSize = new Size(Util.S(836), Util.S(420));
+            ClientSize = new Size(Util.S(872), Util.S(420));
             Rectangle wa = Screen.PrimaryScreen.WorkingArea;
             overlay.Location = new Point(wa.Right - overlay.Width - Util.S(30), wa.Top + Util.S(120));
             overlay.Moved += delegate { Dirty = true; };
@@ -731,7 +1019,12 @@ namespace TibiaTimers
             ToolTip tips = new ToolTip();
             tips.SetToolTip(chkOverlay, "Small always-on-top countdown window (drag it where you like)");
             tips.SetToolTip(chkLockOverlay, "Locked = clicks pass through the overlay to the game");
-            top.Controls.AddRange(new Control[] { btnAdd, btnShow, chkDetect, chkOnlyTibia, chkTopMost, chkOverlay, chkLockOverlay });
+            Button btnObs = new Button();
+            btnObs.Text = "OBS...";
+            btnObs.Bounds = new Rectangle(Util.S(796), Util.S(7), Util.S(66), Util.S(27));
+            btnObs.Click += delegate { using (ObsDialog d = new ObsDialog(this)) d.ShowDialog(this); };
+            tips.SetToolTip(btnObs, "Show the countdowns on your stream (OBS browser source)");
+            top.Controls.AddRange(new Control[] { btnAdd, btnShow, chkDetect, chkOnlyTibia, chkTopMost, chkOverlay, chkLockOverlay, btnObs });
 
             lblStatus = new Label();
             lblStatus.Dock = DockStyle.Bottom;
@@ -752,6 +1045,11 @@ namespace TibiaTimers
 
             LoadSettings();
             overlay.Locked = chkLockOverlay.Checked;
+            if (ObsEnabled)
+            {
+                string err = StartObs();
+                if (err != null) Status(err);
+            }
             loaded = true;
             Status("Ready. Click a hotkey region in Tibia (or press its key) to start a countdown.");
 
@@ -802,6 +1100,7 @@ namespace TibiaTimers
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             overlay.Close();
+            obs.Stop();
             if (mouseHook != IntPtr.Zero) Native.UnhookWindowsHookEx(mouseHook);
             if (keyHook != IntPtr.Zero) Native.UnhookWindowsHookEx(keyHook);
             mouseHook = keyHook = IntPtr.Zero;
@@ -932,6 +1231,7 @@ namespace TibiaTimers
                 r.UpdateView();
             }
             if (overlay.Visible) overlay.UpdateItems(allData);
+            if (obs.Running) obs.StateJson = ObsServer.Json(allData, CountdownOverlay.ExpiredVisibleSec);
             if (Dirty && loaded) { Dirty = false; SaveSettings(); }
         }
 
@@ -990,6 +1290,45 @@ namespace TibiaTimers
 
         void Status(string s) { lblStatus.Text = s; }
 
+        // ---------- OBS ----------
+
+        public bool ObsRunning { get { return obs.Running; } }
+
+        public string ObsUrl()
+        {
+            List<string> q = new List<string>();
+            if (Math.Abs(ObsScale - 1.0) > 0.001) q.Add("scale=" + ObsScale.ToString(CultureInfo.InvariantCulture));
+            if (!ObsPanel) q.Add("panel=0");
+            if (ObsIdle) q.Add("idle=1");
+            return "http://localhost:" + ObsPort + "/" + (q.Count > 0 ? "?" + string.Join("&", q.ToArray()) : "");
+        }
+
+        // Returns an error message, or null.
+        public string SetObs(bool enabled, int port, double scale, bool panel, bool idle)
+        {
+            bool restart = port != ObsPort;
+            ObsEnabled = enabled; ObsPort = port; ObsScale = scale; ObsPanel = panel; ObsIdle = idle;
+            Dirty = true;
+            if (!enabled) { obs.Stop(); return null; }
+            if (obs.Running && !restart) return null;
+            return StartObs();
+        }
+
+        string StartObs()
+        {
+            try
+            {
+                obs.StateJson = ObsServer.Json(allData, CountdownOverlay.ExpiredVisibleSec);
+                obs.Start(ObsPort);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                obs.Stop();
+                return "OBS overlay could not start on port " + ObsPort + ": " + ex.Message + " (try another port)";
+            }
+        }
+
         // ---------- settings ----------
 
         void LoadSettings()
@@ -1029,6 +1368,11 @@ namespace TibiaTimers
                             foreach (Screen s in Screen.AllScreens)
                                 if (s.Bounds.Contains(new Point(pt.X + Util.S(20), pt.Y + Util.S(10)))) { overlay.Location = pt; break; }
                             break;
+                        case "ObsEnabled": ObsEnabled = v == "1"; break;
+                        case "ObsPort": ObsPort = Math.Max(1024, Math.Min(65535, int.Parse(v))); break;
+                        case "ObsScale": ObsScale = Math.Max(0.5, Math.Min(4, double.Parse(v, CultureInfo.InvariantCulture))); break;
+                        case "ObsPanel": ObsPanel = v == "1"; break;
+                        case "ObsIdle": ObsIdle = v == "1"; break;
                         case "WinX": wx = int.Parse(v); break;
                         case "WinY": wy = int.Parse(v); break;
                         case "WinW": ww = int.Parse(v); break;
@@ -1068,6 +1412,11 @@ namespace TibiaTimers
             sb.AppendLine("Overlay=" + (chkOverlay.Checked ? 1 : 0));
             sb.AppendLine("OverlayLock=" + (chkLockOverlay.Checked ? 1 : 0));
             sb.AppendLine("OverlayPos=" + overlay.Left + "," + overlay.Top);
+            sb.AppendLine("ObsEnabled=" + (ObsEnabled ? 1 : 0));
+            sb.AppendLine("ObsPort=" + ObsPort);
+            sb.AppendLine("ObsScale=" + ObsScale.ToString(CultureInfo.InvariantCulture));
+            sb.AppendLine("ObsPanel=" + (ObsPanel ? 1 : 0));
+            sb.AppendLine("ObsIdle=" + (ObsIdle ? 1 : 0));
             Rectangle b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
             sb.AppendLine("WinX=" + b.X); sb.AppendLine("WinY=" + b.Y);
             sb.AppendLine("WinW=" + b.Width); sb.AppendLine("WinH=" + b.Height);

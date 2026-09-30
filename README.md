@@ -20,6 +20,7 @@ You mark the screen area where the item's action bar slot sits, or assign its ke
   - *Ignore while running*.
 - **Only in Tibia window:** clicks and keys in other programs are ignored. Double-clicks count once.
 - **Overlay:** a compact, draggable, always-on-top countdown list. *Lock overlay* makes clicks pass through it into the game.
+- **OBS / streaming:** show the countdowns on stream as an OBS Browser Source. See [Streaming with OBS](#streaming-with-obs).
 - **Survives restarts:** running countdowns continue after you close and reopen the app. Settings are stored in `TibiaTimers.ini` next to the exe.
 - **Single small exe with no dependencies.**
 - **Optional launcher** (`TibiaLauncher.exe`): starts Tibia with or without the timers, and can close the timers when you close Tibia.
@@ -64,6 +65,24 @@ Close the app before rebuilding, because Windows locks an exe while it is runnin
 3. Optional: click **Set key** and press the Tibia hotkey you use for that item.
 4. Click **Sound...** to pick a file, and set **Alert _N_ s before end**.
 5. Play. Using the slot starts the countdown, and the sound plays before it ends.
+
+## Streaming with OBS
+
+1. In Tibia Timers, click **OBS...** and tick **Enable the OBS overlay**. This starts a small web server that only this PC can reach (default port `8766`).
+2. Click **Copy** to copy the URL (`http://localhost:8766/`).
+3. In OBS, go to **Sources -> + -> Browser**, paste the URL and set **Width 400** and **Height 300**.
+
+The background is transparent. The box shows running, paused and just-expired timers with the same colours as the desktop overlay, and hides itself when nothing is running. Silent timers never flash.
+
+Options (they're added to the URL for you):
+
+| Option | URL | Effect |
+|---|---|---|
+| Size | `?scale=1.5` | Bigger or smaller text (0.5 to 4) |
+| Dark background box | `?panel=0` to turn it off | Text only, with a shadow |
+| Show idle timers | `?idle=1` | Also list timers that aren't running |
+
+**Preview** opens the page in your normal browser with a dark backdrop, so you can check it. In OBS the backdrop is transparent. To restyle it completely, save your own page as `obs-overlay.html` next to the exe; it's served instead of the built-in one, and it can read the live data from `/state` (JSON).
 
 ## Launcher
 
